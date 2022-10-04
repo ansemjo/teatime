@@ -1,30 +1,29 @@
-// teatime - Simple LCD Timer
+// teatime - Simple LCD Timer board
 // Copyright (c) 2022 Anton Semjonov
 // Licensed under the MIT License
 
-// attiny417 @ 20 mhz
-#define F_CPU 20000000L
-
-// address of lcd driver on i2c bus
-#define DRIVER_ADDRESS \x3e
+// attiny417 @ 10 mhz
+#define F_CPU 10000000L
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/delay.h>
 #include <avr/sleep.h>
 
+#include "lcddriver.h"
+#include "segments.h"
 
 // ---------- system clocks and sleep --------- //
 
-// use internal 20 mhz oscillator for system clock
+// use internal oscillator for 10 mhz system clock
 void setup_system_clock() {
   // make sure OSCCFG.FREQSEL fuse is 0x02 for 20 MHz
 
   // configure system clock source
   _PROTECTED_WRITE(CLKCTRL.MCLKCTRLA, CLKCTRL_CLKSEL_OSC20M_gc);
 
-  // disable the system clock prescaler
-  _PROTECTED_WRITE(CLKCTRL.MCLKCTRLB, (0 << CLKCTRL_PEN_bp));
+  // enable system clock prescaler with 2X division for 10 mhz
+  _PROTECTED_WRITE(CLKCTRL.MCLKCTRLB, CLKCTRL_PDIV_2X_gc | CLKCTRL_PEN_bm);
 
   // lock the main clock registers from further modification
   _PROTECTED_WRITE(CLKCTRL.MCLKLOCK, CLKCTRL_LOCKEN_bm);
@@ -88,7 +87,12 @@ void setup_buttons() {
 #define BTN_SET (PORTB.IN & PIN7_bm)
 
 void setup_lcddriver() {
-  // TODO: setup I2C here
+
+  // enable i2c pullups
+  PORTB.PIN0CTRL = PORT_PULLUPEN_bm;
+  PORTB.PIN1CTRL = PORT_PULLUPEN_bm;
+
+  // power on the chip
   PORTA.DIRSET = \
     PIN6_bm  // LCD_VLCD // TODO: use DAC output
   | PIN7_bm; // LCD_VDD
