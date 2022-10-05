@@ -12,6 +12,7 @@
 
 #include "lcddriver.h"
 #include "segments.h"
+#include "i2c_controller.h"
 
 // ---------- system clocks and sleep --------- //
 
@@ -61,9 +62,13 @@ ISR(RTC_PIT_vect) {
 }
 
 // configure sleep mode
-void setup_sleep() {
+void configure_sleep_powerdown() {
   // enable power-down sleep mode (only PIT can wake)
   SLPCTRL.CTRLA = SLPCTRL_SMODE_PDOWN_gc | SLPCTRL_SEN_bm;
+}
+void configure_sleep_idle() {
+  // enable idle sleep mode (peripherals remain active)
+  SLPCTRL.CTRLA = SLPCTRL_SMODE_IDLE_gc | SLPCTRL_SEN_bm;
 }
 
 
@@ -103,17 +108,33 @@ void setup_lcddriver() {
 
 // ---------- main program ---------- //
 
-// is one of the buttons pressed
-void ispressed() {
-  if (BTN_ADD || BTN_SET) LED_ON() else LED_OFF();
-}
+uint8_t mybuf[5] = {
+  // turn on display from DDRAM
+  LCD_MODESET_cmd | LCD_MODESET_ON | LCD_MODESET_bias_03,
+  // HELO (reverse order)
+  CHAR_0, CHAR_L, CHAR_E, CHAR_H,
+  // 0xF5, 0x85, 0x97, 0x67,
+};
 
-// toggle the led in interrupt
+// display ticks and blink the led in periodic interrupt
+volatile uint16_t secs = 0;
 void periodic_interrupt() {
+  // increment ticks
+  secs++;
+  // toggle led
   LED_TGL();
+  // format display digits from ticks
+  mybuf[1] = NUMBERS[(secs     )%10];
+  mybuf[2] = NUMBERS[(secs/  10)%10];
+  mybuf[3] = NUMBERS[(secs/ 100)%10];
+  mybuf[4] = NUMBERS[(secs/1000)%10];
+  // add dot on even ticks
+  if ((secs % 2) == 0) mybuf[4] |= Ap;
+  // write to display controller
+  i2c_write(LCD_ADDRESS, mybuf, 5);
 }
 
-void main() {
+int main() {
 
   // setup all the things
   setup_system_clock();
@@ -121,9 +142,17 @@ void main() {
   setup_crystal_rtc();
   setup_lcddriver();
   setup_buttons();
-  setup_sleep();
+
+  configure_sleep_powerdown();
 
   sei(); // enable interrupts
+
+  i2c_init();
+  i2c_write(LCD_ADDRESS, mybuf, 5);
+
+  while (!(TWI0.MSTATUS & TWI_BUSSTATE_IDLE_gc));
+  mybuf[0] = 0x00;
+
   for (;;) sleep_cpu();
 
 }
