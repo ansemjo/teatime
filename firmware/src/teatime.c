@@ -18,13 +18,51 @@
 
 // TODO: setup buttons with interrupts
 void setup_buttons() {
-  PORTB.DIRCLR = PIN6_bm | PIN7_bm; // set PB6, PB7 as inputs
-  PORTB.PIN6CTRL = 0; // not inverted, no pullup, no interrupt
-  PORTB.PIN7CTRL = 0; // not inverted, no pullup, no interrupt
+
+  // set PB6, PB7 as inputs
+  PORTB.DIRCLR = PIN6_bm | PIN7_bm;
+  // enable pin interrupts on those pins, no inversion, no pullup
+  PORTB.PIN6CTRL = PORT_ISC_BOTHEDGES_gc;
+  PORTB.PIN7CTRL = PORT_ISC_BOTHEDGES_gc;
+
 }
 #define BTN_ADD (PORTB.IN & PIN6_bm)
 #define BTN_SET (PORTB.IN & PIN7_bm)
 
+volatile int8_t btn_add = 0;
+volatile int8_t btn_set = 0;
+
+ISR(PORTB_PORT_vect) {
+  // ADD
+  if (PORTB.INTFLAGS & PORT_INT6_bm) {
+    if (PORTB.IN & PIN6_bm) btn_add++; else btn_add--;
+    PORTB.INTFLAGS |= PORT_INT6_bm;
+  }
+  // SET
+  if (PORTB.INTFLAGS & PORT_INT7_bm) {
+    if (PORTB.IN & PIN7_bm) btn_set++; else btn_set--;
+    PORTB.INTFLAGS |= PORT_INT7_bm;
+  }
+}
+
+// disable input buffers on unused pins
+void disable_unused_pins() {
+  // PA1–PA4
+  PORTA.PIN1CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  PORTA.PIN2CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  PORTA.PIN3CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  PORTA.PIN4CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  // PB4, PB5
+  PORTB.PIN4CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  PORTB.PIN5CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  // PC0–PC5 (complete)
+  PORTC.PIN0CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  PORTC.PIN1CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  PORTC.PIN2CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  PORTC.PIN3CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  PORTC.PIN4CTRL = PORT_ISC_INPUT_DISABLE_gc;
+  PORTC.PIN5CTRL = PORT_ISC_INPUT_DISABLE_gc;
+}
 
 uint8_t mybuf[5] = {
   // turn on display from DDRAM
@@ -36,7 +74,7 @@ uint8_t mybuf[5] = {
 
 // display ticks and blink the led in periodic interrupt
 volatile uint16_t secs = 0;
-void tick() {
+void tick_old() {
   // increment ticks
   secs++; led_toggle();
   // format display digits from ticks
@@ -50,6 +88,25 @@ void tick() {
   i2c_write(LCD_ADDRESS, mybuf, 5);
 }
 
+// display button interrupt counts
+void tick() {
+  if (btn_set < 0) {
+    mybuf[1] = NUMBERS[btn_set*-1];
+    mybuf[2] = CHAR_MINUS;
+  } else {
+    mybuf[1] = NUMBERS[btn_set%10];
+    mybuf[2] = CHAR_SPACE;
+  }
+  if (btn_add < 0) {
+    mybuf[3] = NUMBERS[btn_add*-1];
+    mybuf[4] = CHAR_MINUS;
+  } else {
+    mybuf[3] = NUMBERS[btn_add%10];
+    mybuf[4] = CHAR_SPACE;
+  }
+  i2c_write(LCD_ADDRESS, mybuf, 5);
+}
+
 int main() {
 
   // setup all the things
@@ -59,6 +116,7 @@ int main() {
   setup_lcddriver();
   setup_buttons();
   sleep_configure_powerdown();
+  disable_unused_pins();
   sei(); // enable interrupts
 
   i2c_init();
