@@ -115,14 +115,15 @@ int main() {
   setup_led();
   setup_lcddriver();
   setup_buttons();
-  sleep_configure_powerdown();
+  sleep_configure_standby();
+  sleep_enable();
   disable_unused_pins();
   sei(); // enable interrupts
 
   i2c_init();
   i2c_write(LCD_ADDRESS, mybuf, 5);
 
-  while (!(TWI0.MSTATUS & TWI_BUSSTATE_IDLE_gc));
+  i2c_wait_until_idle();
   mybuf[0] = 0x00;
 
   for (;;) sleep_cpu();

@@ -6,8 +6,14 @@
 
 #include <avr/io.h>
 
-// enable power-down sleep mode (only PIT can wake)
-#define sleep_configure_powerdown() SLPCTRL.CTRLA = SLPCTRL_SMODE_PDOWN_gc | SLPCTRL_SEN_bm
+// enable sleep modes in general
+#define sleep_enable() SLPCTRL.CTRLA |= SLPCTRL_SEN_bm;
 
-// enable idle sleep mode (peripherals remain active)
-#define sleep_configure_idle() SLPCTRL.CTRLA = SLPCTRL_SMODE_IDLE_gc | SLPCTRL_SEN_bm
+// configure idle sleep mode (peripherals remain active)
+#define sleep_configure_idle() SLPCTRL.CTRLA = SLPCTRL_SMODE_IDLE_gc | (SLPCTRL.CTRLA & SLPCTRL_SEN_bm)
+
+// configure standy sleep mode (RTC remains active)
+#define sleep_configure_standby() SLPCTRL.CTRLA = SLPCTRL_SMODE_STDBY_gc | (SLPCTRL.CTRLA & SLPCTRL_SEN_bm)
+
+// configure power-down sleep mode (only PIT can wake)
+#define sleep_configure_powerdown() SLPCTRL.CTRLA = SLPCTRL_SMODE_PDOWN_gc | (SLPCTRL.CTRLA & SLPCTRL_SEN_bm)

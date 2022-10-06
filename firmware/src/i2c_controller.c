@@ -15,6 +15,9 @@ i2c_error i2c_result = success;
 static volatile uint8_t *buf = NULL;
 static volatile uint8_t *end = NULL;
 
+// save the previous sleep controller state
+static volatile uint8_t sleepmode = 0x00;
+
 
 // configure the twi controller for interrupt-driven operation
 void i2c_init() {
@@ -44,7 +47,8 @@ void i2c_start(uint8_t address, bool reading) {
   // write the address
   TWI0.MADDR = address << 1 | (reading ? 1 : 0);
 
-  // configure idle sleep mode (peripherals remain active)
+  // configure idle sleep mode (so peripherals remain active)
+  sleepmode = SLPCTRL.CTRLA;
   sleep_configure_idle();
 
 }
@@ -56,8 +60,8 @@ void i2c_end(i2c_error err) {
   i2c_result = err;
   buf = end = NULL;
 
-  // enable power-down sleep mode (only PIT can wake)
-  sleep_configure_powerdown();
+  // restore previous sleep mode
+  SLPCTRL.CTRLA = sleepmode;
 
 }
 
@@ -69,6 +73,11 @@ void i2c_stop() {
   // TODO: we don't want busy waiting in an ISR, do we?
   while (!(TWI0.MSTATUS & TWI_BUSSTATE_IDLE_gc));
 
+}
+
+// busy-wait for a transaction to finish
+void i2c_wait_until_idle() {
+  while (!(TWI0.MSTATUS & TWI_BUSSTATE_IDLE_gc));
 }
 
 

@@ -40,4 +40,5 @@ typedef enum {
 i2c_error i2c_result;
 
 void i2c_init();
+void i2c_wait_until_idle();
 bool i2c_write(uint8_t address, const uint8_t *buf, const uint8_t len);
