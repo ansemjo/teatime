@@ -65,3 +65,6 @@
 #define LCD_APCTL_APON_allON   0b1 << 1 // force all pixels ON
 #define LCD_APCTL_APOFF_normal 0b0 << 0 // do not force all pixels off
 #define LCD_APCTL_APOFF_allOFF 0b1 << 0 // force all pixels OFF
+
+
+void setup_lcddriver();

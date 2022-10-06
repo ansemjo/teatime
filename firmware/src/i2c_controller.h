@@ -6,6 +6,10 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
 
 // use fast mode with 400 khz
 #define F_SCL 400000L // [hz]

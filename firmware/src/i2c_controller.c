@@ -2,13 +2,9 @@
 // Copyright (c) 2022 Anton Semjonov
 // Licensed under the MIT License
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <avr/io.h>
-#include <avr/interrupt.h>
-
 #include "i2c_controller.h"
+#include "sleepmode.h"
+
 
 // ---------- init and basics ---------- //
 
@@ -49,7 +45,7 @@ void i2c_start(uint8_t address, bool reading) {
   TWI0.MADDR = address << 1 | (reading ? 1 : 0);
 
   // configure idle sleep mode (peripherals remain active)
-  SLPCTRL.CTRLA = SLPCTRL_SMODE_IDLE_gc | SLPCTRL_SEN_bm;
+  sleep_configure_idle();
 
 }
 
@@ -58,11 +54,10 @@ void i2c_end(i2c_error err) {
 
   // store transaction result and clear pointers
   i2c_result = err;
-  buf = NULL;
-  end = NULL;
+  buf = end = NULL;
 
   // enable power-down sleep mode (only PIT can wake)
-  SLPCTRL.CTRLA = SLPCTRL_SMODE_PDOWN_gc | SLPCTRL_SEN_bm;
+  sleep_configure_powerdown();
 
 }
 
