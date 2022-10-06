@@ -13,55 +13,111 @@
 #include "segments.h"
 #include "lcddriver.h"
 #include "i2c_controller.h"
+#include "ports.h"
 #include "led.h"
 
+// counters for button press duration
+volatile uint8_t btn_add_count = 0;
+volatile bool    btn_add_was_long = false;
+volatile uint8_t btn_set_count = 0;
+volatile bool    btn_set_was_long = false;
 
-// TODO: setup buttons with interrupts
-void setup_buttons() {
+// how many ticks for a long press
+const int long_len = 32;
 
-  // set PB6, PB7 as inputs
-  PORTB.DIRCLR = PIN6_bm | PIN7_bm;
-  // enable pin interrupts on those pins, no inversion, no pullup
-  PORTB.PIN6CTRL = PORT_ISC_BOTHEDGES_gc;
-  PORTB.PIN7CTRL = PORT_ISC_BOTHEDGES_gc;
+// "state machine"
+typedef enum {
+  idle = 0,
+  running,
+  paused,
+  finished,
+} teatime_state;
+volatile teatime_state state = idle;
 
-}
-#define BTN_ADD (PORTB.IN & PIN6_bm)
-#define BTN_SET (PORTB.IN & PIN7_bm)
+// mini buffer for lcd commands
+uint8_t lcd_commands[3] = { 0x00, 0x00, 0x00 };
 
-volatile int8_t btn_add = 0;
-volatile int8_t btn_set = 0;
+// set countdown value
+volatile uint16_t countdown_preset = 0;
+volatile uint16_t countdown = 0;
+volatile uint16_t rtc_value = 0;
 
-ISR(PORTB_PORT_vect) {
-  // ADD
-  if (PORTB.INTFLAGS & PORT_INT6_bm) {
-    if (PORTB.IN & PIN6_bm) btn_add++; else btn_add--;
-    PORTB.INTFLAGS |= PORT_INT6_bm;
+/**
+ * State machine with button presses:
+ * (×btn = short press, |btn = long press)
+ * 
+ * [0] "00:00" set time
+ *    ×add --> + 10 seconds
+ *    |add --> + 1 minute (+ hold)
+ *    ×set --> [1] running, store countdown value as preset
+ * 
+ * [1] running, time runs down, switch to [2] end on zero
+ *    ×add, |add --> as [0], but not added to preset
+ *    ×set --> pause/unpause
+ * 
+ * [2] end, led and display is blinking
+ *    ×set --> reset to [0] with previously preset time
+ * 
+**/
+
+void button_add() {
+  if (!(pressed_add)) {
+    // long press handled in tick()
+    if (state != finished) {
+      if (!btn_add_was_long) countdown += 10;
+      if (countdown >= 6000) countdown = 5999;
+    }
+    btn_add_count = 0;
+    btn_add_was_long = false;
   }
-  // SET
-  if (PORTB.INTFLAGS & PORT_INT7_bm) {
-    if (PORTB.IN & PIN7_bm) btn_set++; else btn_set--;
-    PORTB.INTFLAGS |= PORT_INT7_bm;
-  }
 }
 
-// disable input buffers on unused pins
-void disable_unused_pins() {
-  // PA1–PA4
-  PORTA.PIN1CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  PORTA.PIN2CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  PORTA.PIN3CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  PORTA.PIN4CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  // PB4, PB5
-  PORTB.PIN4CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  PORTB.PIN5CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  // PC0–PC5 (complete)
-  PORTC.PIN0CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  PORTC.PIN1CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  PORTC.PIN2CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  PORTC.PIN3CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  PORTC.PIN4CTRL = PORT_ISC_INPUT_DISABLE_gc;
-  PORTC.PIN5CTRL = PORT_ISC_INPUT_DISABLE_gc;
+void button_set() {
+  if (pressed_set) {
+
+    switch (state) {
+      case idle:
+        if (countdown == 0) {
+          led_toggle();
+          break;
+        }
+        countdown_preset = countdown;
+        run_rtc(1);
+        state = running;
+        break;
+
+      case running:
+        rtc_value = halt_rtc();
+        lcd_commands[0] = LCD_BLKCTL_cmd | LCD_BLKCTL_1Hz;
+        i2c_write(LCD_ADDRESS, lcd_commands, 1);
+        state = paused;
+        break;
+
+      case paused:
+        run_rtc(rtc_value);
+        lcd_commands[0] = LCD_BLKCTL_cmd | LCD_BLKCTL_off;
+        i2c_write(LCD_ADDRESS, lcd_commands, 1);
+        state = running;
+        break;
+
+      case finished:
+        countdown = countdown_preset;
+        lcd_commands[0] = LCD_BLKCTL_cmd | LCD_BLKCTL_off;
+        i2c_write(LCD_ADDRESS, lcd_commands, 1);
+        led_off();
+        state = idle;
+        break;
+      
+      default:
+        break;
+    }
+  } else {
+    if (state == idle) {
+      led_off();
+    }
+    btn_set_count = 0;
+    btn_set_was_long = false;
+  }
 }
 
 uint8_t mybuf[5] = {
@@ -72,46 +128,72 @@ uint8_t mybuf[5] = {
   // 0xF5, 0x85, 0x97, 0x67,
 };
 
-// display ticks and blink the led in periodic interrupt
-volatile uint16_t secs = 0;
-void tick_old() {
-  // increment ticks
-  secs++; led_toggle();
-  // format display digits from ticks
-  mybuf[1] = NUMBERS[(secs     )%10];
-  mybuf[2] = NUMBERS[(secs/  10)%10];
-  mybuf[3] = NUMBERS[(secs/ 100)%10];
-  mybuf[4] = NUMBERS[(secs/1000)%10];
-  // add dot on even ticks
-  if ((secs % 2) == 0) mybuf[4] |= Ap;
-  // write to display controller
+// display the countdown time in 12:34 format
+void display_time(uint16_t time) {
+  // split into mins:secs
+  uint8_t secs = time % 60;
+  uint8_t mins = time / 60;
+  // format seconds
+  mybuf[1] = NUMBERS[ secs       % 10];
+  mybuf[2] = NUMBERS[(secs / 10) % 10];
+  mybuf[3] = NUMBERS[ mins       % 10] | Ap;
+  mybuf[4] = NUMBERS[(mins / 10) % 10];
+  // when running, blink the colon
+  if ((state == running) && (secs % 2) == 1) {
+    mybuf[3] &= ~Ap;
+  }
   i2c_write(LCD_ADDRESS, mybuf, 5);
 }
 
+
 // display button interrupt counts
 void tick() {
-  if (btn_set < 0) {
-    mybuf[1] = NUMBERS[btn_set*-1];
-    mybuf[2] = CHAR_MINUS;
-  } else {
-    mybuf[1] = NUMBERS[btn_set%10];
-    mybuf[2] = CHAR_SPACE;
+  if (pressed_add && state != finished) {
+    btn_add_count++;
+    if (btn_add_count >= long_len) {
+      btn_add_was_long = true;
+      countdown += 60;
+      if (countdown >= 6000) countdown = 5999;
+      btn_add_count = 0;
+    }
   }
-  if (btn_add < 0) {
-    mybuf[3] = NUMBERS[btn_add*-1];
-    mybuf[4] = CHAR_MINUS;
-  } else {
-    mybuf[3] = NUMBERS[btn_add%10];
-    mybuf[4] = CHAR_SPACE;
+  if (pressed_set) {
+    if (btn_set_count < long_len*2) {
+      btn_set_count++;
+    } else if (!btn_set_was_long) {
+      btn_set_was_long = true;
+      halt_rtc();
+      countdown_preset = countdown = 0;
+      lcd_commands[0] = LCD_BLKCTL_cmd | LCD_BLKCTL_off;
+      i2c_write(LCD_ADDRESS, lcd_commands, 1);
+      led_off();
+      state = idle;
+      btn_set_count = 0;
+    }
   }
-  i2c_write(LCD_ADDRESS, mybuf, 5);
+  display_time(countdown);
+}
+
+// count down
+void second() {
+  if (countdown > 0)
+    countdown--;
+  if (countdown == 0) {
+    halt_rtc();
+    state = finished;
+    lcd_commands[0] = LCD_BLKCTL_cmd | LCD_BLKCTL_2Hz;
+    i2c_write(LCD_ADDRESS, lcd_commands, 1);
+    led_on();
+  }
 }
 
 int main() {
 
   // setup all the things
-  setup_10mhz_system_clock();
-  setup_crystal_rtc(RTC_PERIOD_CYC512_gc);
+  setup_system_clock();
+  setup_crystal();
+  setup_pit_ticks(RTC_PERIOD_CYC512_gc);
+  setup_rtc_seconds();
   setup_led();
   setup_lcddriver();
   setup_buttons();
